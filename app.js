@@ -121,8 +121,8 @@ function myName() { var u = session && session.user; return (u && u.user_metadat
 async function viewHome(msg) {
   app.innerHTML = '<div class="top"><span class="who-am">Hola, ' + esc(myName()) + '</span><button type="button" class="btn" id="out">Surt</button></div><h1>Les teves obres</h1><p class="sub" id="hs">Carregant...</p><ul class="plist" id="pl"></ul>' +
     '<div class="panel"><h3>Nova obra</h3><form id="nf">' +
-    '<div class="field"><label for="n-name">Nom de l\'obra</label><input id="n-name" type="text" maxlength="120" placeholder="Reforma casa Corbera" required></div>' +
-    '<div class="field"><label for="n-client">Nom del client (apareix a les etiquetes)</label><input id="n-client" type="text" maxlength="80" placeholder="Jordi i Laia"></div>' +
+    '<div class="field"><label for="n-name">Nom de l\'obra</label><input id="n-name" type="text" maxlength="120" required></div>' +
+    '<div class="field"><label for="n-client">Nom del client (apareix a les etiquetes)</label><input id="n-client" type="text" maxlength="80"></div>' +
     '<div class="field"><label for="n-tpl">Punts de partida</label><select id="n-tpl"><option value="empty">Obra buida</option><option value="demo">Amb l\'exemple (cuina, portes i armaris)</option></select></div>' +
     '<button type="submit" class="btn primary">Crea l\'obra</button> <span class="err" id="ne"></span></form></div>';
   $("out").addEventListener("click", function () { sb.auth.signOut(); });
