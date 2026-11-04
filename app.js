@@ -148,6 +148,48 @@ async function viewHome(msg) {
   });
 }
 
+/* ---------- importar punts d'un text (WhatsApp, correu...) ---------- */
+function impStripMark(s) {
+  s = s.replace(/^[-*]\s+/, "").trim();
+  if (s.length > 1 && s.charAt(0) === "*" && s.charAt(s.length - 1) === "*") s = s.slice(1, -1).trim();
+  if (s.length > 1 && s.charAt(0) === "_" && s.charAt(s.length - 1) === "_") s = s.slice(1, -1).trim();
+  return s;
+}
+function impIsBullet(line) { return /^\s*[-*]\s+/.test(line); }
+function impIsHeader(line) {
+  var t = line.trim();
+  return t.length > 0 && t.length <= 60 && !impIsBullet(line) && /:$/.test(t);
+}
+function impTitle(s) {
+  s = s.trim();
+  if (!s) return "";
+  if (s.length <= 100) return s;
+  var cut = s.slice(0, 100), sp = cut.lastIndexOf(" ");
+  if (sp > 40) cut = cut.slice(0, sp);
+  return cut + "…";
+}
+function parseImportText(text, defaultSection) {
+  var lines = text.replace(/\r\n/g, "\n").split("\n");
+  var items = [], section = (defaultSection || "General").trim() || "General";
+  var qLines = [], aLines = [];
+  function flush() {
+    var q = qLines.join(" ").trim().slice(0, 4000), a = aLines.join(" ").trim().slice(0, 4000);
+    qLines = []; aLines = [];
+    var title = impTitle(q || a);
+    if (!title) return;
+    items.push({ section: section, title: title, question: q, answer: a });
+  }
+  for (var k = 0; k < lines.length; k++) {
+    var line = lines[k].trim();
+    if (!line) { if (aLines.length) flush(); continue; }
+    if (impIsHeader(line)) { flush(); section = line.replace(/:$/, "").trim() || section; continue; }
+    if (impIsBullet(line)) { aLines.push(impStripMark(line)); }
+    else { if (aLines.length) flush(); qLines.push(impStripMark(line)); }
+  }
+  flush();
+  return items;
+}
+
 /* ---------- tauler (propietari i convidat) ---------- */
 async function openBoard(opts) {
   B = Object.assign({ data: null, json: "", me: "", active: "tots", editing: null, editingQ: null, drafts: {}, confirmDel: null, confirmItem: null, focusNext: false,
@@ -229,6 +271,11 @@ function renderShell() {
       '<div class="field"><label for="ap-t">Títol</label><input id="ap-t" type="text" maxlength="120" required></div>' +
       '<div class="field"><label for="ap-q">Pregunta o tema</label><textarea id="ap-q" maxlength="4000"></textarea></div>' +
       '<button type="submit" class="btn primary">Afegeix</button> <span class="err" id="ap-e"></span></form></div>';
+    h += '<div class="panel"><h3>Importa punts d\'un text (WhatsApp, correu...)</h3>' +
+      '<p>Enganxa el text. Una línia que acaba en « : » (i no comença amb «-» ni «*») es tracta com una secció nova. Les línies normals formen la pregunta; les que comencen per «-» o «*» formen la resposta. Tots els punts es creen en estat «Sense resposta»: revisa\'ls i ajusta\'ls després.</p>' +
+      '<form id="impf"><div class="field"><label for="imp-sec">Secció per defecte (si el text no en té)</label><input id="imp-sec" type="text" maxlength="80" value="General"></div>' +
+      '<div class="field"><label for="imp-txt">Text a convertir</label><textarea id="imp-txt" maxlength="20000" rows="10"></textarea></div>' +
+      '<button type="submit" class="btn primary">Converteix i afegeix els punts</button> <span class="err" id="imp-e"></span><span class="okmsg" id="imp-ok"></span></form></div>';
   }
   app.innerHTML = h;
   if (B.mode === "owner") fillSecs();
@@ -273,6 +320,24 @@ function bindShell() {
     var r = await sb.from("items").insert({ project_id: B.data.project.id, section: $("ap-sec").value.trim(), title: $("ap-t").value.trim(), question: $("ap-q").value.trim(), position: pos, status: "open" });
     if (r.error) { $("ap-e").textContent = "No s'ha pogut afegir."; return; }
     f.reset(); await loadBoard(false); fillSecs();
+  });
+  var impf = $("impf");
+  if (impf) impf.addEventListener("submit", async function (ev) {
+    ev.preventDefault();
+    $("imp-e").textContent = ""; $("imp-ok").textContent = "";
+    var parsed = parseImportText($("imp-txt").value, $("imp-sec").value);
+    if (!parsed.length) { $("imp-e").textContent = "No s'ha identificat cap punt en aquest text."; return; }
+    var btn = impf.querySelector("button"); btn.disabled = true;
+    var pos = B.data.items.reduce(function (m, i) { return Math.max(m, i.position); }, -1) + 1;
+    var rows = parsed.map(function (it) {
+      return { project_id: B.data.project.id, section: it.section, position: pos++, title: it.title, question: it.question, answer: it.answer, status: "open" };
+    });
+    var r2 = await sb.from("items").insert(rows);
+    btn.disabled = false;
+    if (r2.error) { $("imp-e").textContent = "No s'ha pogut afegir els punts."; return; }
+    impf.reset(); $("imp-sec").value = "General";
+    $("imp-ok").textContent = "S'han afegit " + rows.length + " punts. Revisa\'ls més avall.";
+    await loadBoard(false); fillSecs();
   });
 }
 
