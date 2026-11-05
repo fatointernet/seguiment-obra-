@@ -140,6 +140,23 @@ begin
     and (p.owner_id = auth.uid() or (p_token is not null and p.share_enabled and p.share_token = p_token));
 end $$;
 
+create or replace function public.add_item(p_project uuid, p_section text, p_title text, p_question text, p_position int, p_token uuid default null)
+returns uuid language plpgsql security definer set search_path = public as $$
+declare v_id uuid;
+begin
+  if not exists (
+    select 1 from projects p
+    where p.id = p_project
+      and (p.owner_id = auth.uid() or (p_token is not null and p.share_enabled and p.share_token = p_token))
+  ) then
+    raise exception 'not_found' using errcode = 'P0002';
+  end if;
+  insert into items (project_id, section, position, title, question, status)
+  values (p_project, btrim(p_section), p_position, btrim(p_title), btrim(p_question), 'open')
+  returning id into v_id;
+  return v_id;
+end $$;
+
 create or replace function public.add_photo(p_item uuid, p_author text, p_path text, p_token uuid default null)
 returns uuid language plpgsql security definer set search_path = public as $$
 declare v_project uuid; v_id uuid;
@@ -180,6 +197,7 @@ revoke all on function public._project_of_item(uuid, uuid) from public, anon, au
 revoke all on function public.get_board(uuid, uuid) from public;
 revoke all on function public.add_entry(uuid, text, text, uuid) from public;
 revoke all on function public.delete_entry(uuid, text, uuid) from public;
+revoke all on function public.add_item(uuid, text, text, text, int, uuid) from public;
 revoke all on function public.add_photo(uuid, text, text, uuid) from public;
 revoke all on function public.delete_photo(uuid, text, uuid) from public;
 revoke all on function public.set_flag(uuid, boolean, text, uuid) from public;
@@ -187,6 +205,7 @@ revoke all on function public.set_status(uuid, text, text, uuid) from public;
 grant execute on function public.get_board(uuid, uuid) to anon, authenticated;
 grant execute on function public.add_entry(uuid, text, text, uuid) to anon, authenticated;
 grant execute on function public.delete_entry(uuid, text, uuid) to anon, authenticated;
+grant execute on function public.add_item(uuid, text, text, text, int, uuid) to anon, authenticated;
 grant execute on function public.add_photo(uuid, text, text, uuid) to anon, authenticated;
 grant execute on function public.delete_photo(uuid, text, uuid) to anon, authenticated;
 grant execute on function public.set_flag(uuid, boolean, text, uuid) to anon, authenticated;

@@ -27,7 +27,7 @@ Después vuelve a Supabase > **Authentication** > **URL Configuration** y pon es
 ## Cómo funciona el acceso
 
 - **Profesional:** correo y contraseña. Solo ve sus propias obras. Puede añadir, editar y borrar puntos y gestionar el enlace.
-- **Cliente con enlace:** sin cuenta. Puede escribir respuestas, marcar la bandera roja, cambiar el estado y borrar sus propias respuestas. No puede cambiar las preguntas ni borrar puntos.
+- **Cliente con enlace:** sin cuenta. Puede escribir respuestas, marcar la bandera roja, cambiar el estado, borrar sus propias respuestas y **añadir puntos nuevos** (preguntas que se le ocurran a él). No puede editar el título ni la pregunta de un punto ya creado, ni borrar puntos existentes: eso solo lo puede hacer el profesional.
 - **Enlace comprometido:** el profesional puede pulsar «Genera un enllaç nou» (el antiguo deja de funcionar) o «Desactiva l'enllaç».
 
 ## Límites que debes conocer
