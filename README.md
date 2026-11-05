@@ -37,5 +37,6 @@ Después vuelve a Supabase > **Authentication** > **URL Configuration** y pon es
 - **Sin límite de uso por enlace.** Alguien con el enlace podría llenar una obra de texto. Se arregla regenerando el enlace.
 - **Las horas** las pone el servidor, así que no dependen del móvil de cada uno.
 - **Plan gratuito de Supabase:** hasta donde sé, pausa los proyectos sin actividad durante una semana, y limita los correos que envía por sí mismo. Compruébalo en su página de precios antes de usarlo con clientes de pago. Cuando sea un producto, lo normal es el plan de pago y un servicio de correo propio.
+- **Fotos:** se guardan en el almacenamiento (Storage) de Supabase, que en el plan gratuito tiene 1 GB. Cada foto se reduce en el móvil antes de subirla, pero aun así conviene vigilar el uso si hay muchas obras activas. Al borrar una foto se intenta borrar también el archivo; si falla (por ejemplo, por desconexión) el archivo puede quedar guardado sin usarse — revisa el bucket `photos` de vez en cuando si te preocupa el espacio.
 - **Datos personales:** si lo ofreces a clientes reales, guardas datos suyos. Conviene tener una política de privacidad.
 - **Idioma:** la interfaz está en catalán. Cambiarla o ofrecerla en varios idiomas es un trabajo aparte.

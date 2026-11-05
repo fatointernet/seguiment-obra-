@@ -15,6 +15,34 @@ function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
 var FLAG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 2h2v20H5zM8 3h12l-3 5 3 5H8z"/></svg>';
 function $(id) { return document.getElementById(id); }
 
+/* ---------- fotos ---------- */
+function safeName(n) { return (n || "foto.jpg").replace(/[^a-zA-Z0-9.\-_]/g, "_").slice(-60); }
+function photoPath(itemId, filename) {
+  var who = B.mode === "owner" ? "owner" : String(B.token);
+  return B.data.project.id + "/" + who + "/" + itemId + "/" + Date.now() + "-" + safeName(filename);
+}
+function resizeImage(file, maxDim, quality) {
+  return new Promise(function (resolve) {
+    if (!file.type || file.type.indexOf("image/") !== 0 || !window.createImageBitmap && !window.Image) { resolve(file); return; }
+    var img = new Image(), url = URL.createObjectURL(file);
+    var done = function (result) { URL.revokeObjectURL(url); resolve(result); };
+    img.onload = function () {
+      var w = img.naturalWidth, h = img.naturalHeight;
+      if (!w || !h || (w <= maxDim && h <= maxDim)) { done(file); return; }
+      var scale = Math.min(maxDim / w, maxDim / h);
+      var canvas = document.createElement("canvas");
+      canvas.width = Math.round(w * scale); canvas.height = Math.round(h * scale);
+      var ctx = canvas.getContext("2d");
+      if (!ctx) { done(file); return; }
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob(function (blob) { done(blob || file); }, "image/jpeg", quality);
+    };
+    img.onerror = function () { done(file); };
+    img.src = url;
+  });
+}
+function photoUrl(path) { return sb.storage.from("photos").getPublicUrl(path).data.publicUrl; }
+
 if (!cfg.SUPABASE_URL || !cfg.SUPABASE_ANON_KEY) {
   app.innerHTML = '<div class="auth"><h1>Falta configurar</h1><p>Obre <b>config.js</b> i enganxa-hi la URL i la «anon key» del teu projecte de Supabase. Les instruccions són al fitxer README.md.</p></div>';
   return;
@@ -192,7 +220,7 @@ function parseImportText(text, defaultSection) {
 
 /* ---------- tauler (propietari i convidat) ---------- */
 async function openBoard(opts) {
-  B = Object.assign({ data: null, json: "", me: "", active: "tots", editing: null, editingQ: null, drafts: {}, confirmDel: null, confirmItem: null, focusNext: false,
+  B = Object.assign({ data: null, json: "", me: "", active: "tots", editing: null, editingQ: null, drafts: {}, confirmDel: null, confirmItem: null, confirmPhoto: null, focusNext: false,
     share: null, lastSeen: 0, canStore: false, msgText: "", msgBad: false }, opts);
   app.innerHTML = '<p class="sub">Carregant...</p>';
   var ok = await loadBoard(true);
@@ -231,6 +259,7 @@ async function loadBoard(first) {
   if (json === mine.json) return true;
   mine.json = json; mine.data = r.data;
   var m = {}; r.data.entries.forEach(function (e) { (m[e.item_id] = m[e.item_id] || []).push(e); }); mine.logs = m;
+  var ph = {}; (r.data.photos || []).forEach(function (p) { (ph[p.item_id] = ph[p.item_id] || []).push(p); }); mine.photosByItem = ph;
   var bi = {}; r.data.items.forEach(function (i) { bi[i.id] = i; }); mine.byId = bi;
   if (!first) renderDyn();
   return true;
@@ -415,6 +444,23 @@ function entryMeta(e, label) {
   return h + "</p>";
 }
 
+function photosBlock(i) {
+  var pics = B.photosByItem[i.id] || [];
+  var h = '<div class="photos"><p class="label">Fotos</p>';
+  if (pics.length) {
+    h += '<div class="photogrid">' + pics.map(function (p) {
+      var url = photoUrl(p.path), mine_ = B.me && p.author.toLowerCase() === B.me.toLowerCase();
+      var del = mine_ ? (B.confirmPhoto === p.id
+        ? ' · Segur? <button type="button" class="linkbtn danger" data-act="phdelyes" data-pid="' + p.id + '">Sí</button> <button type="button" class="linkbtn" data-act="phdelno">No</button>'
+        : ' · <button type="button" class="linkbtn" data-act="phdel" data-pid="' + p.id + '">Esborra</button>') : "";
+      return '<figure><a href="' + esc(url) + '" target="_blank" rel="noopener"><img src="' + esc(url) + '" alt="Foto de ' + esc(p.author) + '" loading="lazy"></a>' +
+        '<figcaption>' + esc(p.author) + del + "</figcaption></figure>";
+    }).join("") + "</div>";
+  }
+  h += '<div class="tools"><label class="btn filebtn">Afegeix una foto<input type="file" accept="image/*" data-act="phpick" data-id="' + i.id + '"></label><span class="err" id="ph-e-' + i.id + '"></span></div></div>';
+  return h;
+}
+
 function card(i, L, newIds, openSet) {
   var cur = current(i), hist = B.logs[i.id] || [], P = B.data.project, owner = B.mode === "owner";
   var h = '<article class="card' + (i.flag ? " flagged" : "") + '" data-s="' + i.status + '" id="c-' + i.id + '">';
@@ -432,6 +478,7 @@ function card(i, L, newIds, openSet) {
     else h += '<p class="noans">Encara sense resposta.</p>';
     h += "</div>";
   }
+  h += photosBlock(i);
   if (i.next_step) h += '<p class="next"><strong>Següent pas:</strong> ' + esc(i.next_step) + "</p>";
   if (i.status_by) h += '<p class="meta">Estat canviat per ' + esc(i.status_by) + " · " + esc(fmt(i.status_at)) + "</p>";
   if (B.editing === i.id) {
@@ -480,6 +527,8 @@ app.addEventListener("click", async function (ev) {
   if (act === "qcancel") { B.editingQ = null; delete B.drafts["q" + id]; renderDyn(); return; }
   if (act === "del") { B.confirmDel = b.getAttribute("data-eid"); renderDyn(); return; }
   if (act === "delno") { B.confirmDel = null; renderDyn(); return; }
+  if (act === "phdel") { B.confirmPhoto = b.getAttribute("data-pid"); renderDyn(); return; }
+  if (act === "phdelno") { B.confirmPhoto = null; renderDyn(); return; }
   if (act === "idel") { B.confirmItem = id; renderDyn(); return; }
   if (act === "idelno") { B.confirmItem = null; renderDyn(); return; }
   if (act === "idelyes") { B.confirmItem = null; await write(sb.from("items").delete().eq("id", id), "Punt eliminat."); return; }
@@ -490,6 +539,15 @@ app.addEventListener("click", async function (ev) {
   }
   if (needMe()) return;
   if (act === "delyes") { var eid = b.getAttribute("data-eid"); B.confirmDel = null; await write(sb.rpc("delete_entry", args({ p_entry: eid, p_author: B.me })), "Esborrat."); return; }
+  if (act === "phdelyes") {
+    var pid = b.getAttribute("data-pid"), photo = null;
+    (B.data.photos || []).forEach(function (p) { if (p.id === pid) photo = p; });
+    B.confirmPhoto = null;
+    var rp = await sb.rpc("delete_photo", args({ p_photo: pid, p_author: B.me }));
+    if (!rp.error && photo) sb.storage.from("photos").remove([photo.path]);
+    B.json = ""; await loadBoard(false); renderDyn();
+    return;
+  }
   if (act === "flag") { await write(sb.rpc("set_flag", args({ p_item: id, p_flag: !item.flag, p_author: B.me }))); return; }
   if (act === "save") {
     var ta = $("ta-" + id), text = ta ? ta.value.trim() : "";
@@ -506,10 +564,30 @@ app.addEventListener("input", function (ev) {
   if (t.tagName === "TEXTAREA" && t.getAttribute("data-qid")) B.drafts["q" + t.getAttribute("data-qid")] = t.value;
 });
 app.addEventListener("change", async function (ev) {
-  var sel = ev.target; if (!B || !B.data || sel.tagName !== "SELECT" || !sel.getAttribute("data-id")) return;
-  var id = sel.getAttribute("data-id");
-  if (sel.value === B.byId[id].status) return;
+  var t = ev.target;
+  if (!B || !B.data) return;
+  if (t.tagName === "INPUT" && t.type === "file" && t.getAttribute("data-act") === "phpick") {
+    var id = t.getAttribute("data-id"), file = t.files && t.files[0];
+    t.value = "";
+    if (!file) return;
+    var errEl = $("ph-e-" + id);
+    if (needMe()) return;
+    if (file.size > 20 * 1024 * 1024) { if (errEl) errEl.textContent = "La foto pesa massa (màxim 20 MB)."; return; }
+    if (file.type && file.type.indexOf("image/") !== 0) { if (errEl) errEl.textContent = "Només es poden pujar imatges."; return; }
+    if (errEl) errEl.textContent = "Pujant la foto...";
+    var blob = await resizeImage(file, 1600, 0.82);
+    var path = photoPath(id, file.name);
+    var up = await sb.storage.from("photos").upload(path, blob, { contentType: blob.type || "image/jpeg" });
+    if (up.error) { var e1 = $("ph-e-" + id); if (e1) e1.textContent = "No s'ha pogut pujar la foto."; return; }
+    var r = await sb.rpc("add_photo", args({ p_item: id, p_author: B.me, p_path: path }));
+    if (r.error) { var e2 = $("ph-e-" + id); if (e2) e2.textContent = "La foto s'ha pujat però no s'ha pogut desar."; return; }
+    B.json = ""; await loadBoard(false); renderDyn();
+    return;
+  }
+  var sel = ev.target; if (sel.tagName !== "SELECT" || !sel.getAttribute("data-id")) return;
+  var id2 = sel.getAttribute("data-id");
+  if (sel.value === B.byId[id2].status) return;
   if (needMe()) { renderDyn(); return; }
-  await write(sb.rpc("set_status", args({ p_item: id, p_status: sel.value, p_author: B.me })));
+  await write(sb.rpc("set_status", args({ p_item: id2, p_status: sel.value, p_author: B.me })));
 });
 })();
