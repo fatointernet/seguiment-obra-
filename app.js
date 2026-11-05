@@ -476,9 +476,10 @@ function card(i, L, newIds, openSet) {
   h += "</div>";
   if (cur || i.answer || i.status !== "info") {
     h += '<div class="a"><p class="label">' + (cur ? "Resposta actual" : "Resposta") + "</p>";
-    if (cur) h += "<p>" + esc(cur.body) + "</p>" + entryMeta(cur, "Editat per ");
-    else if (i.answer) h += "<p>" + esc(i.answer) + "</p>";
-    else h += '<p class="noans">Encara sense resposta.</p>';
+    var ce = B.editing === i.id ? "" : ' data-act="edit" data-id="' + i.id + '"';
+    if (cur) h += '<p class="ansbox"' + ce + ">" + esc(cur.body) + "</p>" + entryMeta(cur, "Editat per ");
+    else if (i.answer) h += '<p class="ansbox"' + ce + ">" + esc(i.answer) + "</p>";
+    else h += '<p class="noans ansbox"' + ce + '>Encara sense resposta. Fes clic aquí per escriure-la.</p>';
     h += "</div>";
   }
   h += photosBlock(i);
@@ -558,7 +559,10 @@ app.addEventListener("click", async function (ev) {
     var cur = current(item), prev = cur ? cur.body : (item.answer || "");
     if (text === prev) { B.editing = null; renderDyn(); return; }
     B.editing = null; delete B.drafts[id];
-    await write(sb.rpc("add_entry", args({ p_item: id, p_author: B.me, p_body: text })), "Desat.");
+    var savedOk = await write(sb.rpc("add_entry", args({ p_item: id, p_author: B.me, p_body: text })), "Desat.");
+    if (savedOk && item.status === "open") {
+      await write(sb.rpc("set_status", args({ p_item: id, p_status: B.mode === "owner" ? "client" : "pro", p_author: B.me })));
+    }
   }
 });
 app.addEventListener("input", function (ev) {
