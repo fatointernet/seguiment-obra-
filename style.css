@@ -82,6 +82,8 @@ h2 { font-family: var(--font-display); font-size: 22px; margin: 32px 0 12px; tex
 .a { background: var(--ans-bg); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
 .a .label { color: var(--accent); }
 .a p { font-weight: 500; }
+.ansbox[data-act="edit"] { cursor: pointer; border-radius: 6px; margin: -4px -6px; padding: 4px 6px; }
+.ansbox[data-act="edit"]:hover { filter: brightness(0.95); }
 .next { margin: 0; font-size: 14.5px; color: var(--ink); }
 .next strong { font-weight: 600; }
 .change { margin: 8px 0 0; padding: 8px 12px; border-radius: 8px; background: var(--client-bg); color: var(--client); font-size: 14.5px; font-weight: 500; }
