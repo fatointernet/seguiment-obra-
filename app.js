@@ -196,6 +196,7 @@ function impTitle(s) {
   if (sp > 40) cut = cut.slice(0, sp);
   return cut + "…";
 }
+function headline(i) { return impTitle(i.question) || i.section || "Punt"; }
 function parseImportText(text, defaultSection) {
   var lines = text.replace(/\r\n/g, "\n").split("\n");
   var items = [], section = (defaultSection || "General").trim() || "General";
@@ -295,11 +296,10 @@ function renderShell() {
   }
   h += '<p class="status' + (B.msgBad ? " bad" : "") + '" id="status" role="status">' + esc(B.msgText || "Connectat. Els canvis es veuen en directe.") + "</p>";
   h += '<div id="dyn"></div>';
+  h += '<div class="panel"><h3>Afegeix un punt</h3><form id="af2"><div class="field"><label for="ap-sec">Secció (cuina, lavabos...)</label><input id="ap-sec" list="secs" type="text" maxlength="80" required><datalist id="secs"></datalist></div>' +
+    '<div class="field"><label for="ap-q">Pregunta o tema</label><textarea id="ap-q" maxlength="4000" required></textarea></div>' +
+    '<button type="submit" class="btn primary">Afegeix</button> <span class="err" id="ap-e"></span></form></div>';
   if (B.mode === "owner") {
-    h += '<div class="panel"><h3>Afegeix un punt</h3><form id="af2"><div class="field"><label for="ap-sec">Secció (cuina, lavabos...)</label><input id="ap-sec" list="secs" type="text" maxlength="80" required><datalist id="secs"></datalist></div>' +
-      '<div class="field"><label for="ap-t">Títol</label><input id="ap-t" type="text" maxlength="120" required></div>' +
-      '<div class="field"><label for="ap-q">Pregunta o tema</label><textarea id="ap-q" maxlength="4000"></textarea></div>' +
-      '<button type="submit" class="btn primary">Afegeix</button> <span class="err" id="ap-e"></span></form></div>';
     h += '<div class="panel"><h3>Importa punts d\'un text (WhatsApp, correu...)</h3>' +
       '<p>Enganxa el text. Una línia que acaba en « : » (i no comença amb «-» ni «*») es tracta com una secció nova. Les línies normals formen la pregunta; les que comencen per «-» o «*» formen la resposta. Tots els punts es creen en estat «Sense resposta»: revisa\'ls i ajusta\'ls després.</p>' +
       '<form id="impf"><div class="field"><label for="imp-sec">Secció per defecte (si el text no en té)</label><input id="imp-sec" type="text" maxlength="80" value="General"></div>' +
@@ -307,7 +307,7 @@ function renderShell() {
       '<button type="submit" class="btn primary">Converteix i afegeix els punts</button> <span class="err" id="imp-e"></span><span class="okmsg" id="imp-ok"></span></form></div>';
   }
   app.innerHTML = h;
-  if (B.mode === "owner") fillSecs();
+  fillSecs();
   bindShell();
 }
 function fillSecs() {
@@ -346,7 +346,8 @@ function bindShell() {
   if (f) f.addEventListener("submit", async function (ev) {
     ev.preventDefault();
     var pos = B.data.items.reduce(function (m, i) { return Math.max(m, i.position); }, -1) + 1;
-    var r = await sb.from("items").insert({ project_id: B.data.project.id, section: $("ap-sec").value.trim(), title: $("ap-t").value.trim(), question: $("ap-q").value.trim(), position: pos, status: "open" });
+    var sec = $("ap-sec").value.trim(), q = $("ap-q").value.trim();
+    var r = await sb.rpc("add_item", args({ p_project: B.data.project.id, p_section: sec, p_title: impTitle(q) || sec || "Punt", p_question: q, p_position: pos }));
     if (r.error) { $("ap-e").textContent = "No s'ha pogut afegir."; return; }
     f.reset(); await loadBoard(false); fillSecs();
   });
@@ -391,7 +392,8 @@ function renderDyn() {
   var L = labels(), P = B.data.project, items = B.data.items;
   var openSet = {};
   el.querySelectorAll("details.hist[open]").forEach(function (d) { openSet[d.getAttribute("data-id")] = 1; });
-  var ta0 = document.activeElement && document.activeElement.tagName === "TEXTAREA" && el.contains(document.activeElement) ? document.activeElement : null;
+  var af = document.activeElement;
+  var ta0 = af && af.tagName === "TEXTAREA" && el.contains(af) ? af : null;
   var ss = ta0 ? ta0.selectionStart : 0, se = ta0 ? ta0.selectionEnd : 0, y = window.scrollY;
 
   var c = { tots: items.length, importants: 0 };
@@ -402,19 +404,19 @@ function renderDyn() {
     return '<button type="button" class="chip" data-f="' + p[0] + '" aria-pressed="' + (B.active === p[0]) + '">' + esc(p[1]) + " <b>" + c[p[0]] + "</b></button>";
   }).join("") + "</div>";
 
-  function li(arr) { return arr.map(function (i) { return "<li>" + esc(i.todo || i.title) + "</li>"; }).join("") || '<li class="empty">Res</li>'; }
+  function li(arr) { return arr.map(function (i) { return "<li>" + esc(i.todo || headline(i)) + "</li>"; }).join("") || '<li class="empty">Res</li>'; }
   var cl = items.filter(function (i) { return i.status === "client" || i.status === "open"; });
   var pr = items.filter(function (i) { return i.status === "pro"; });
   var fl = items.filter(function (i) { return i.flag; });
   h += '<h2 style="margin-top:8px">Què queda per fer</h2><div class="todo">';
-  if (fl.length) h += '<div class="box flag"><h3>Marcat com a molt important (' + fl.length + ")</h3><ul>" + fl.map(function (i) { return "<li>" + esc(i.section + ": " + i.title) + " (" + esc(i.flag_by || "") + ", " + esc(fmt(i.flag_at)) + ")</li>"; }).join("") + "</ul></div>";
+  if (fl.length) h += '<div class="box flag"><h3>Marcat com a molt important (' + fl.length + ")</h3><ul>" + fl.map(function (i) { return "<li>" + esc(i.section + ": " + headline(i)) + " (" + esc(i.flag_by || "") + ", " + esc(fmt(i.flag_at)) + ")</li>"; }).join("") + "</ul></div>";
   h += '<div class="box client"><h3>' + esc(L.client) + " (" + cl.length + ")</h3><ul>" + li(cl) + "</ul></div>";
   h += '<div class="box pro"><h3>' + esc(L.pro) + " (" + pr.length + ")</h3><ul>" + li(pr) + "</ul></div></div>";
 
   var ev = events().slice(0, 8);
   var newIds = {}; events().forEach(function (e) { if (isNew(e.at, e.by)) newIds[e.id] = 1; });
   if (ev.length) h += "<h2>Últims canvis</h2><ul class=\"feedlist\">" + ev.map(function (e) {
-    return "<li>" + (isNew(e.at, e.by) ? '<span class="newtag">Nou</span> ' : "") + "<strong>" + esc(e.by || "?") + "</strong> " + esc(e.txt) + ' <button type="button" class="linkbtn" data-go="' + e.id + '">' + esc(B.byId[e.id].title) + '</button><span class="meta"> · ' + esc(fmt(e.at)) + "</span></li>";
+    return "<li>" + (isNew(e.at, e.by) ? '<span class="newtag">Nou</span> ' : "") + "<strong>" + esc(e.by || "?") + "</strong> " + esc(e.txt) + ' <button type="button" class="linkbtn" data-go="' + e.id + '">' + esc(headline(B.byId[e.id])) + '</button><span class="meta"> · ' + esc(fmt(e.at)) + "</span></li>";
   }).join("") + "</ul>";
 
   var secs = [], bySec = {};
@@ -425,12 +427,13 @@ function renderDyn() {
     bySec[i.section].push(i);
   });
   secs.forEach(function (s) { h += "<h2>" + esc(s) + "</h2>" + bySec[s].map(function (i) { return card(i, L, newIds, openSet); }).join(""); });
-  if (!secs.length) h += '<p class="empty">' + (items.length ? "No hi ha cap punt amb aquest filtre." : "Encara no hi ha cap punt." + (B.mode === "owner" ? " Afegeix el primer aquí sota." : "")) + "</p>";
+  if (!secs.length) h += '<p class="empty">' + (items.length ? "No hi ha cap punt amb aquest filtre." : "Encara no hi ha cap punt. Afegeix el primer aquí sota.") + "</p>";
 
   el.innerHTML = h;
   window.scrollTo(0, y);
   var tgt = null;
-  if (B.editing) tgt = $("ta-" + B.editing); else if (B.editingQ) tgt = $("tq-" + B.editingQ);
+  if (B.editing) tgt = $("ta-" + B.editing);
+  else if (B.editingQ) tgt = $("tq-" + B.editingQ);
   if (tgt && (ta0 || B.focusNext)) { tgt.focus(); tgt.setSelectionRange(ta0 ? ss : tgt.value.length, ta0 ? se : tgt.value.length); }
   B.focusNext = false;
 }
@@ -465,7 +468,7 @@ function card(i, L, newIds, openSet) {
   var cur = current(i), hist = B.logs[i.id] || [], P = B.data.project, owner = B.mode === "owner";
   var h = '<article class="card' + (i.flag ? " flagged" : "") + '" data-s="' + i.status + '" id="c-' + i.id + '">';
   if (i.flag) h += '<p class="banner">Molt important · marcat per ' + esc(i.flag_by || "?") + " · " + esc(fmt(i.flag_at)) + "</p>";
-  h += '<div class="head"><h3>' + esc(i.title) + (newIds[i.id] ? ' <span class="newtag">Nou</span>' : "") + '</h3><span class="pill ' + i.status + '">' + esc(L[i.status]) + "</span></div>";
+  h += '<div class="head">' + (newIds[i.id] ? '<span class="newtag">Nou</span>' : "") + '<span class="pill ' + i.status + '">' + esc(L[i.status]) + "</span></div>";
   h += '<div class="q"><p class="label">' + esc(P.owner_name) + " pregunta</p>";
   if (B.editingQ === i.id) {
     h += '<textarea id="tq-' + i.id + '" data-qid="' + i.id + '" aria-label="Pregunta">' + esc(B.drafts["q" + i.id] != null ? B.drafts["q" + i.id] : i.question) + '</textarea><div class="tools"><button type="button" class="btn primary" data-act="qsave" data-id="' + i.id + '">Desa la pregunta</button><button type="button" class="btn" data-act="qcancel" data-id="' + i.id + '">Cancel·la</button></div>';
@@ -535,7 +538,7 @@ app.addEventListener("click", async function (ev) {
   if (act === "qsave") {
     var tq = $("tq-" + id), q = tq ? tq.value.trim() : "";
     B.editingQ = null; delete B.drafts["q" + id];
-    await write(sb.from("items").update({ question: q }).eq("id", id), "Pregunta desada."); return;
+    await write(sb.from("items").update({ question: q, title: impTitle(q) || item.section || "Punt" }).eq("id", id), "Pregunta desada."); return;
   }
   if (needMe()) return;
   if (act === "delyes") { var eid = b.getAttribute("data-eid"); B.confirmDel = null; await write(sb.rpc("delete_entry", args({ p_entry: eid, p_author: B.me })), "Esborrat."); return; }
