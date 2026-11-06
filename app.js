@@ -155,8 +155,30 @@ async function viewHome(msg) {
   $("out").addEventListener("click", function () { sb.auth.signOut(); });
   var r = await sb.from("projects").select("id,name,client_name,created_at").order("created_at", { ascending: false });
   if (r.error) { $("hs").textContent = "No s'han pogut carregar les obres."; return; }
-  $("hs").textContent = r.data.length ? "" : "Encara no tens cap obra. Crea la primera aquí sota.";
-  $("pl").innerHTML = r.data.map(function (p) { return '<li><a href="#/obra/' + esc(p.id) + '">' + esc(p.name) + "<small>" + esc(p.client_name || "Sense client") + " · " + esc(fmt(p.created_at)) + "</small></a></li>"; }).join("");
+  var projects = r.data, confirmId = null;
+  function renderList() {
+    $("hs").textContent = projects.length ? "" : "Encara no tens cap obra. Crea la primera aquí sota.";
+    $("pl").innerHTML = projects.map(function (p) {
+      var del = confirmId === p.id
+        ? '<span class="meta">Segur? S\'esborra tot: punts, respostes i fotos.</span> <button type="button" class="linkbtn danger" data-act="pdelyes" data-id="' + p.id + '">Sí, elimina l\'obra</button> <button type="button" class="linkbtn" data-act="pdelno">No</button>'
+        : '<button type="button" class="linkbtn danger" data-act="pdel" data-id="' + p.id + '">Elimina l\'obra</button>';
+      return '<li><a href="#/obra/' + esc(p.id) + '">' + esc(p.name) + "<small>" + esc(p.client_name || "Sense client") + " · " + esc(fmt(p.created_at)) + '</small></a><div class="row">' + del + "</div></li>";
+    }).join("");
+  }
+  renderList();
+  $("pl").addEventListener("click", async function (ev) {
+    var b = ev.target.closest("[data-act]"); if (!b) return;
+    var act = b.getAttribute("data-act"), id = b.getAttribute("data-id");
+    if (act === "pdel") { confirmId = id; renderList(); return; }
+    if (act === "pdelno") { confirmId = null; renderList(); return; }
+    if (act === "pdelyes") {
+      confirmId = null;
+      var dr = await sb.from("projects").delete().eq("id", id);
+      if (dr.error) { $("hs").textContent = "No s'ha pogut eliminar l'obra."; renderList(); return; }
+      projects = projects.filter(function (p) { return p.id !== id; });
+      renderList();
+    }
+  });
   $("nf").addEventListener("submit", async function (ev) {
     ev.preventDefault();
     var btn = ev.target.querySelector("button"); btn.disabled = true;
