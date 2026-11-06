@@ -14,14 +14,14 @@ Hay que hacerlo una sola vez. Calcula unos 30 minutos.
 
 ## 2. Publicar la web
 
-Lo más simple es **Netlify Drop**: entra en app.netlify.com/drop y arrastra la carpeta entera (con `index.html`, `app.js`, `style.css`, `config.js`, `template.js`). Te da una dirección web. Si ya usas GitHub Pages (fatointernet.github.io), también sirve: sube los mismos archivos a un repositorio.
+Lo más simple es **Netlify Drop**: entra en app.netlify.com/drop y arrastra la carpeta entera (con `index.html`, `app.js`, `style.css`, `config.js`). Te da una dirección web. Si ya usas GitHub Pages (fatointernet.github.io), también sirve: sube los mismos archivos a un repositorio.
 
 Después vuelve a Supabase > **Authentication** > **URL Configuration** y pon esa dirección en **Site URL**. Sirve para que el correo de «He olvidado la contraseña» lleve a tu web.
 
 ## 3. Probarla
 
 1. Abre la dirección, pulsa **Crear compte** y regístrate con tu nombre. El nombre sale en los cambios que hagas.
-2. Crea una obra. Elige «Amb l'exemple» para cargar los puntos de la casa de Jordi, o «Obra buida» para empezar de cero.
+2. Crea una obra (se crea vacía; los puntos los añades tú después).
 3. En la obra, copia el enlace de **Comparteix amb el client** y ábrelo en una ventana privada o en otro móvil. Escribe un nombre y modifica algo. Debe verse en la otra pantalla en menos de 10 segundos.
 
 ## Cómo funciona el acceso

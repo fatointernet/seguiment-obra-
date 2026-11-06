@@ -151,7 +151,6 @@ async function viewHome(msg) {
     '<div class="panel"><h3>Nova obra</h3><form id="nf">' +
     '<div class="field"><label for="n-name">Nom de l\'obra</label><input id="n-name" type="text" maxlength="120" required></div>' +
     '<div class="field"><label for="n-client">Nom del client (apareix a les etiquetes)</label><input id="n-client" type="text" maxlength="80"></div>' +
-    '<div class="field"><label for="n-tpl">Punts de partida</label><select id="n-tpl"><option value="empty">Obra buida</option><option value="demo">Amb l\'exemple (cuina, portes i armaris)</option></select></div>' +
     '<button type="submit" class="btn primary">Crea l\'obra</button> <span class="err" id="ne"></span></form></div>';
   $("out").addEventListener("click", function () { sb.auth.signOut(); });
   var r = await sb.from("projects").select("id,name,client_name,created_at").order("created_at", { ascending: false });
@@ -164,14 +163,6 @@ async function viewHome(msg) {
     var owner = myName();
     var pr = await sb.from("projects").insert({ name: $("n-name").value.trim(), client_name: $("n-client").value.trim(), owner_name: owner }).select("id").single();
     if (pr.error) { $("ne").textContent = "No s'ha pogut crear l'obra."; btn.disabled = false; return; }
-    if ($("n-tpl").value === "demo") {
-      var rows = [], pos = 0, rep = function (t) { return (t || "").replace(/\bIvan\b/g, owner); };
-      window.TEMPLATE_SECTIONS.forEach(function (sec) { sec.items.forEach(function (it) {
-        rows.push({ project_id: pr.data.id, section: sec.title, position: pos++, title: it.t, question: rep(it.q), answer: rep(it.a), next_step: rep(it.n), todo: rep(it.who), status: it.s });
-      }); });
-      var ir = await sb.from("items").insert(rows);
-      if (ir.error) { $("ne").textContent = "L'obra s'ha creat però no s'han pogut afegir els punts d'exemple."; }
-    }
     go("#/obra/" + pr.data.id);
   });
 }
