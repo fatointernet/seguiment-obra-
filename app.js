@@ -4,7 +4,8 @@ var cfg = window.APP_CONFIG || {};
 var app = document.getElementById("app");
 
 /* ---------- utilitats ---------- */
-function esc(s) { var d = document.createElement("div"); d.textContent = s == null ? "" : String(s); return d.innerHTML; }
+var ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return ESC[c]; }); }
 function fmt(iso) {
   try { return new Date(iso).toLocaleString("ca-ES", { timeZone: "Europe/Madrid", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }); }
   catch (e) { return iso; }
@@ -16,24 +17,31 @@ var FLAG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 2h2v20H5zM8 
 function $(id) { return document.getElementById(id); }
 
 /* ---------- fotos ---------- */
-function safeName(n) { return (n || "foto.jpg").replace(/[^a-zA-Z0-9.\-_]/g, "_").slice(-60); }
-function photoPath(itemId, filename) {
-  var who = B.mode === "owner" ? "owner" : String(B.token);
-  return B.data.project.id + "/" + who + "/" + itemId + "/" + Date.now() + "-" + safeName(filename);
+var PHOTO_TYPES = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif" };
+var PHOTO_MAX_BYTES = 10 * 1024 * 1024;
+async function sha256hex(s) {
+  var buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+  return Array.prototype.map.call(new Uint8Array(buf), function (b) { return ("0" + b.toString(16)).slice(-2); }).join("");
 }
-function resizeImage(file, maxDim, quality) {
+// The guest folder is the token's hash, so a forwarded photo URL does not reveal the share link.
+async function photoPath(itemId, type) {
+  var who = B.mode === "owner" ? "owner" : await sha256hex(String(B.token).toLowerCase());
+  return B.data.project.id + "/" + who + "/" + itemId + "/" + Date.now() + "-" + Math.random().toString(36).slice(2, 8) + "." + PHOTO_TYPES[type];
+}
+// Downscales big photos and re-encodes formats the bucket rejects (HEIC...) as JPEG when the browser can decode them.
+function prepareImage(file, maxDim, quality) {
   return new Promise(function (resolve) {
-    if (!file.type || file.type.indexOf("image/") !== 0 || !window.createImageBitmap && !window.Image) { resolve(file); return; }
     var img = new Image(), url = URL.createObjectURL(file);
     var done = function (result) { URL.revokeObjectURL(url); resolve(result); };
     img.onload = function () {
       var w = img.naturalWidth, h = img.naturalHeight;
-      if (!w || !h || (w <= maxDim && h <= maxDim)) { done(file); return; }
-      var scale = Math.min(maxDim / w, maxDim / h);
+      if (!w || !h || (PHOTO_TYPES[file.type] && w <= maxDim && h <= maxDim)) { done(file); return; }
+      var scale = Math.min(1, maxDim / w, maxDim / h);
       var canvas = document.createElement("canvas");
       canvas.width = Math.round(w * scale); canvas.height = Math.round(h * scale);
       var ctx = canvas.getContext("2d");
       if (!ctx) { done(file); return; }
+      ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
       canvas.toBlob(function (blob) { done(blob || file); }, "image/jpeg", quality);
     };
@@ -42,6 +50,12 @@ function resizeImage(file, maxDim, quality) {
   });
 }
 function photoUrl(path) { return sb.storage.from("photos").getPublicUrl(path).data.publicUrl; }
+// Read before deleting rows: the cascade removes the photo rows, not the files in the bucket.
+async function photoPaths(column, value) {
+  var r = await sb.from("photos").select("path").eq(column, value);
+  return r.error ? [] : r.data.map(function (p) { return p.path; });
+}
+function removeFiles(paths) { if (paths.length) sb.storage.from("photos").remove(paths); }
 
 if (!cfg.SUPABASE_URL || !cfg.SUPABASE_ANON_KEY) {
   app.innerHTML = '<div class="auth"><h1>Falta configurar</h1><p>Obre <b>config.js</b> i enganxa-hi la URL i la «anon key» del teu projecte de Supabase. Les instruccions són al fitxer README.md.</p></div>';
@@ -111,6 +125,7 @@ function viewLogin(mode, msg) {
   app.querySelectorAll("[data-m]").forEach(function (b) { b.addEventListener("click", function () { viewLogin(b.getAttribute("data-m")); }); });
   $("af").addEventListener("submit", async function (ev) {
     ev.preventDefault();
+    var sbtn = ev.target.querySelector('button[type="submit"]'); sbtn.disabled = true; sbtn.textContent = "Un moment...";
     var mail = $("a-mail").value.trim(), pass = $("a-pass").value;
     if (reg) {
       var name = $("a-name").value.trim();
@@ -126,6 +141,7 @@ function viewLogin(mode, msg) {
   if (f) f.addEventListener("click", async function () {
     var mail = $("a-mail").value.trim();
     if (!mail) return viewLogin("in", { text: "Escriu primer el teu correu i torna a prémer «He oblidat la contrasenya».", bad: true });
+    f.disabled = true;
     var r = await sb.auth.resetPasswordForEmail(mail, { redirectTo: location.href.split("#")[0] });
     viewLogin("in", r.error ? { text: authErr(r.error), bad: true } : { text: "T'hem enviat un correu amb l'enllaç per posar una contrasenya nova.", bad: false });
   });
@@ -137,6 +153,7 @@ function viewNewPassword(msg) {
     '<button type="submit" class="btn primary">Desa</button></form></div>';
   $("pf").addEventListener("submit", async function (ev) {
     ev.preventDefault();
+    ev.target.querySelector("button").disabled = true;
     var r = await sb.auth.updateUser({ password: $("p1").value });
     if (r.error) return viewNewPassword(authErr(r.error));
     recovery = false; go("#/");
@@ -146,7 +163,7 @@ function viewNewPassword(msg) {
 /* ---------- inici: llista d'obres ---------- */
 function myName() { var u = session && session.user; return (u && u.user_metadata && u.user_metadata.name) || (u && u.email ? u.email.split("@")[0] : "Jo"); }
 
-async function viewHome(msg) {
+async function viewHome() {
   app.innerHTML = '<div class="top"><span class="who-am">Hola, ' + esc(myName()) + '</span><button type="button" class="btn" id="out">Surt</button></div><h1>Les teves obres</h1><p class="sub" id="hs">Carregant...</p><ul class="plist" id="pl"></ul>' +
     '<div class="panel"><h3>Nova obra</h3><form id="nf">' +
     '<div class="field"><label for="n-name">Nom de l\'obra</label><input id="n-name" type="text" maxlength="120" required></div>' +
@@ -154,7 +171,12 @@ async function viewHome(msg) {
     '<button type="submit" class="btn primary">Crea l\'obra</button> <span class="err" id="ne"></span></form></div>';
   $("out").addEventListener("click", function () { sb.auth.signOut(); });
   var r = await sb.from("projects").select("id,name,client_name,created_at").order("created_at", { ascending: false });
-  if (r.error) { $("hs").textContent = "No s'han pogut carregar les obres."; return; }
+  if (!$("pl")) return;
+  if (r.error) {
+    $("hs").innerHTML = 'No s\'han pogut carregar les obres. <button type="button" class="linkbtn" id="hretry">Torna-ho a provar</button>';
+    $("hretry").addEventListener("click", function () { viewHome(); });
+    return;
+  }
   var projects = r.data, confirmId = null;
   function renderList() {
     $("hs").textContent = projects.length ? "" : "Encara no tens cap obra. Crea la primera aquí sota.";
@@ -172,9 +194,12 @@ async function viewHome(msg) {
     if (act === "pdel") { confirmId = id; renderList(); return; }
     if (act === "pdelno") { confirmId = null; renderList(); return; }
     if (act === "pdelyes") {
-      confirmId = null;
+      b.disabled = true;
+      var paths = await photoPaths("project_id", id);
       var dr = await sb.from("projects").delete().eq("id", id);
-      if (dr.error) { $("hs").textContent = "No s'ha pogut eliminar l'obra."; renderList(); return; }
+      confirmId = null;
+      if (dr.error) { renderList(); $("hs").textContent = "No s'ha pogut eliminar l'obra. Torna-ho a provar."; return; }
+      removeFiles(paths);
       projects = projects.filter(function (p) { return p.id !== id; });
       renderList();
     }
@@ -235,7 +260,7 @@ function parseImportText(text, defaultSection) {
 /* ---------- tauler (propietari i convidat) ---------- */
 async function openBoard(opts) {
   B = Object.assign({ data: null, json: "", me: "", active: "tots", editing: null, editingQ: null, drafts: {}, confirmDel: null, confirmItem: null, confirmPhoto: null, focusNext: false,
-    share: null, lastSeen: 0, canStore: false, msgText: "", msgBad: false }, opts);
+    share: null, lastSeen: 0, canStore: false, msgText: "", msgBad: false, uploading: {}, photoErr: {}, editProject: false }, opts);
   app.innerHTML = '<p class="sub">Carregant...</p>';
   var ok = await loadBoard(true);
   if (!ok) return;
@@ -255,16 +280,23 @@ async function openBoard(opts) {
 }
 function saveSeen() { if (B && B.data && B.canStore) lsSet("seg-seen-" + B.data.project.id, String(Date.now())); }
 window.addEventListener("pagehide", saveSeen);
-document.addEventListener("visibilitychange", function () { if (document.visibilityState === "hidden") saveSeen(); });
+document.addEventListener("visibilitychange", function () {
+  if (document.visibilityState === "hidden") saveSeen();
+  else if (B && B.data) loadBoard(false);
+});
 
 async function loadBoard(first) {
   var mine = B;
   var r = await sb.rpc("get_board", { p_project: mine.projectId || null, p_token: mine.token || null });
   if (B !== mine) return false;
   if (r.error) {
-    if (first) {
+    if (first && (r.error.code === "P0002" || /not_found/.test(r.error.message || ""))) {
       app.innerHTML = '<div class="auth"><h1>No trobem aquesta obra</h1><p>' + (mine.mode === "guest" ? "L'enllaç no és vàlid o el propietari l'ha desactivat. Demana'n un de nou." : "No tens accés a aquesta obra.") + '</p>' +
         (mine.mode === "owner" ? '<a class="sublink" href="#/">Torna a les teves obres</a>' : "") + "</div>";
+    } else if (first) {
+      app.innerHTML = '<div class="auth"><h1>No s\'ha pogut connectar</h1><p>Comprova la connexió a internet i torna-ho a provar.</p>' +
+        '<button type="button" class="btn primary" id="retry">Torna-ho a provar</button></div>';
+      $("retry").addEventListener("click", route);
     } else setMsg("S'ha perdut la connexió. Es tornarà a provar sola.", true);
     return false;
   }
@@ -290,7 +322,14 @@ function shareUrl() { return location.href.split("#")[0] + "#/l/" + B.share.shar
 function renderShell() {
   var P = B.data.project, h = "";
   if (B.mode === "owner") h += '<div class="top"><a class="sublink" href="#/">← Les teves obres</a><button type="button" class="btn" id="out">Surt</button></div>';
-  h += "<h1>" + esc(P.name) + '</h1><p class="sub">' + (B.mode === "owner" ? "Tu ets " + esc(P.owner_name) + ". " : "") + (P.client_name ? "Client: " + esc(P.client_name) + ". " : "") + "Cada punt mostra la pregunta, la resposta i qui ha de fer el següent pas.</p>";
+  h += "<h1>" + esc(P.name) + '</h1><p class="sub">' + (B.mode === "owner" ? "Tu ets " + esc(P.owner_name) + ". " : "") + (P.client_name ? "Client: " + esc(P.client_name) + ". " : "") + "Cada punt mostra la pregunta, la resposta i qui ha de fer el següent pas." +
+    (B.mode === "owner" && !B.editProject ? ' <button type="button" class="linkbtn" id="pe-open">Edita el nom de l\'obra o del client</button>' : "") + "</p>";
+  if (B.mode === "owner" && B.editProject) {
+    h += '<form class="panel" id="pedit"><h3>Dades de l\'obra</h3>' +
+      '<div class="field"><label for="pe-name">Nom de l\'obra</label><input id="pe-name" type="text" maxlength="120" required value="' + esc(P.name) + '"></div>' +
+      '<div class="field"><label for="pe-client">Nom del client (apareix a les etiquetes)</label><input id="pe-client" type="text" maxlength="80" value="' + esc(P.client_name) + '"></div>' +
+      '<div class="row"><button type="submit" class="btn primary">Desa</button><button type="button" class="btn" id="pe-cancel">Cancel·la</button><span class="err" id="pe-e"></span></div></form>';
+  }
   if (B.mode === "owner" && B.share) {
     h += '<div class="panel" id="sharep"><h3>Comparteix amb el client</h3>';
     if (B.share.share_enabled) {
@@ -331,11 +370,28 @@ function fillSecs() {
 
 function bindShell() {
   var out = $("out"); if (out) out.addEventListener("click", function () { sb.auth.signOut(); });
+  var peo = $("pe-open");
+  if (peo) peo.addEventListener("click", function () { B.editProject = true; renderShell(); renderDyn(); $("pe-name").focus(); });
+  var pec = $("pe-cancel");
+  if (pec) pec.addEventListener("click", function () { B.editProject = false; renderShell(); renderDyn(); });
+  var pef = $("pedit");
+  if (pef) pef.addEventListener("submit", async function (ev) {
+    ev.preventDefault();
+    var name = $("pe-name").value.trim(), client = $("pe-client").value.trim();
+    if (!name) { $("pe-e").textContent = "L'obra ha de tenir un nom."; return; }
+    var btn = pef.querySelector('button[type="submit"]'); btn.disabled = true;
+    var r = await sb.from("projects").update({ name: name, client_name: client }).eq("id", B.data.project.id);
+    if (r.error) { btn.disabled = false; $("pe-e").textContent = "No s'ha pogut desar. Torna-ho a provar."; return; }
+    B.editProject = false; B.json = ""; await loadBoard(false);
+    renderShell(); renderDyn(); setMsg("Dades de l'obra desades.", false);
+  });
   var ns = $("nsave");
   if (ns) ns.addEventListener("click", function () {
-    var v = $("nm").value.trim(); if (!v) return;
-    B.me = v; lsSet("seg-name", v); renderShell(); renderDyn();
+    var v = $("nm").value.trim(); if (!v) { $("nm").focus(); return; }
+    B.me = v; lsSet("seg-name", v); renderShell(); renderDyn(); setMsg("Nom desat. Ja pots escriure.", false);
   });
+  var nm = $("nm");
+  if (nm) nm.addEventListener("keydown", function (ev) { if (ev.key === "Enter") { ev.preventDefault(); ns.click(); } });
   var cp = $("scopy");
   if (cp) cp.addEventListener("click", function () {
     var inp = $("slink"); inp.select();
@@ -358,11 +414,14 @@ function bindShell() {
   var f = $("af2");
   if (f) f.addEventListener("submit", async function (ev) {
     ev.preventDefault();
-    var pos = B.data.items.reduce(function (m, i) { return Math.max(m, i.position); }, -1) + 1;
     var sec = $("ap-sec").value.trim(), q = $("ap-q").value.trim();
-    var r = await sb.rpc("add_item", args({ p_project: B.data.project.id, p_section: sec, p_title: impTitle(q) || sec || "Punt", p_question: q, p_position: pos }));
-    if (r.error) { $("ap-e").textContent = "No s'ha pogut afegir."; return; }
-    f.reset(); await loadBoard(false); fillSecs();
+    if (!sec || !q) { $("ap-e").textContent = "Omple la secció i la pregunta."; return; }
+    var abtn = f.querySelector("button"); abtn.disabled = true; $("ap-e").textContent = "";
+    var pos = B.data.items.reduce(function (m, i) { return Math.max(m, i.position); }, -1) + 1;
+    var r = await sb.rpc("add_item", args({ p_project: B.data.project.id, p_section: sec, p_title: impTitle(q) || sec, p_question: q, p_position: pos }));
+    abtn.disabled = false;
+    if (r.error) { $("ap-e").textContent = "No s'ha pogut afegir. Torna-ho a provar."; return; }
+    $("ap-q").value = ""; setMsg("Punt afegit.", false); B.json = ""; await loadBoard(false); fillSecs();
   });
   var impf = $("impf");
   if (impf) impf.addEventListener("submit", async function (ev) {
@@ -385,7 +444,6 @@ function bindShell() {
 }
 
 /* ---------- part dinàmica: filtres, pendents, canvis i targetes ---------- */
-function eff(i) { return i.status; }
 function current(i) { var l = B.logs[i.id]; return l && l.length ? l[l.length - 1] : null; }
 function isNew(at, by) { return B.canStore && B.lastSeen > 0 && by !== B.me && new Date(at).getTime() > B.lastSeen; }
 
@@ -417,17 +475,18 @@ function renderDyn() {
     return '<button type="button" class="chip" data-f="' + p[0] + '" aria-pressed="' + (B.active === p[0]) + '">' + esc(p[1]) + " <b>" + c[p[0]] + "</b></button>";
   }).join("") + "</div>";
 
-  function li(arr) { return arr.map(function (i) { return "<li>" + esc(i.todo || headline(i)) + "</li>"; }).join("") || '<li class="empty">Res</li>'; }
+  function jump(i, text) { return '<button type="button" class="linkbtn" data-go="' + i.id + '">' + esc(text) + "</button>"; }
+  function li(arr) { return arr.map(function (i) { return "<li>" + jump(i, i.todo || headline(i)) + "</li>"; }).join("") || '<li class="empty">Res</li>'; }
   var cl = items.filter(function (i) { return i.status === "client" || i.status === "open"; });
   var pr = items.filter(function (i) { return i.status === "pro"; });
   var fl = items.filter(function (i) { return i.flag; });
-  h += '<h2 style="margin-top:8px">Què queda per fer</h2><div class="todo">';
-  if (fl.length) h += '<div class="box flag"><h3>Marcat com a molt important (' + fl.length + ")</h3><ul>" + fl.map(function (i) { return "<li>" + esc(i.section + ": " + headline(i)) + " (" + esc(i.flag_by || "") + ", " + esc(fmt(i.flag_at)) + ")</li>"; }).join("") + "</ul></div>";
+  h += '<h2 class="first">Què queda per fer</h2><div class="todo">';
+  if (fl.length) h += '<div class="box flag"><h3>Marcat com a molt important (' + fl.length + ")</h3><ul>" + fl.map(function (i) { return "<li>" + jump(i, i.section + ": " + headline(i)) + ' <span class="meta">(' + esc(i.flag_by || "") + ", " + esc(fmt(i.flag_at)) + ")</span></li>"; }).join("") + "</ul></div>";
   h += '<div class="box client"><h3>' + esc(L.client) + " (" + cl.length + ")</h3><ul>" + li(cl) + "</ul></div>";
   h += '<div class="box pro"><h3>' + esc(L.pro) + " (" + pr.length + ")</h3><ul>" + li(pr) + "</ul></div></div>";
 
-  var ev = events().slice(0, 8);
-  var newIds = {}; events().forEach(function (e) { if (isNew(e.at, e.by)) newIds[e.id] = 1; });
+  var allEv = events(), ev = allEv.slice(0, 8);
+  var newIds = {}; allEv.forEach(function (e) { if (isNew(e.at, e.by)) newIds[e.id] = 1; });
   if (ev.length) h += "<h2>Últims canvis</h2><ul class=\"feedlist\">" + ev.map(function (e) {
     return "<li>" + (isNew(e.at, e.by) ? '<span class="newtag">Nou</span> ' : "") + "<strong>" + esc(e.by || "?") + "</strong> " + esc(e.txt) + ' <button type="button" class="linkbtn" data-go="' + e.id + '">' + esc(headline(B.byId[e.id])) + '</button><span class="meta"> · ' + esc(fmt(e.at)) + "</span></li>";
   }).join("") + "</ul>";
@@ -451,9 +510,11 @@ function renderDyn() {
   B.focusNext = false;
 }
 
+function canDelete(author) { return B.mode === "owner" || (!!B.me && author.toLowerCase() === B.me.toLowerCase()); }
+
 function entryMeta(e, label) {
   var h = '<p class="meta">' + label + esc(e.author) + " · " + esc(fmt(e.created_at));
-  if (B.me && e.author.toLowerCase() === B.me.toLowerCase()) {
+  if (canDelete(e.author)) {
     if (B.confirmDel === e.id) h += ' · Segur? <button type="button" class="linkbtn danger" data-act="delyes" data-eid="' + e.id + '">Sí, esborra</button> <button type="button" class="linkbtn" data-act="delno">No</button>';
     else h += ' · <button type="button" class="linkbtn" data-act="del" data-eid="' + e.id + '">Esborra</button>';
   }
@@ -465,15 +526,19 @@ function photosBlock(i) {
   var h = '<div class="photos"><p class="label">Fotos</p>';
   if (pics.length) {
     h += '<div class="photogrid">' + pics.map(function (p) {
-      var url = photoUrl(p.path), mine_ = B.me && p.author.toLowerCase() === B.me.toLowerCase();
-      var del = mine_ ? (B.confirmPhoto === p.id
+      var url = photoUrl(p.path);
+      var del = canDelete(p.author) ? (B.confirmPhoto === p.id
         ? ' · Segur? <button type="button" class="linkbtn danger" data-act="phdelyes" data-pid="' + p.id + '">Sí</button> <button type="button" class="linkbtn" data-act="phdelno">No</button>'
         : ' · <button type="button" class="linkbtn" data-act="phdel" data-pid="' + p.id + '">Esborra</button>') : "";
       return '<figure><a href="' + esc(url) + '" target="_blank" rel="noopener"><img src="' + esc(url) + '" alt="Foto de ' + esc(p.author) + '" loading="lazy"></a>' +
         '<figcaption>' + esc(p.author) + del + "</figcaption></figure>";
     }).join("") + "</div>";
   }
-  h += '<div class="tools"><label class="btn filebtn">Afegeix una foto<input type="file" accept="image/*" data-act="phpick" data-id="' + i.id + '"></label><span class="err" id="ph-e-' + i.id + '"></span></div></div>';
+  var err = B.photoErr[i.id];
+  h += '<div class="tools">' + (B.uploading[i.id]
+    ? '<span class="meta" role="status">Pujant la foto...</span>'
+    : '<label class="btn filebtn">Afegeix una foto<input type="file" accept="image/*" data-act="phpick" data-id="' + i.id + '"></label>') +
+    (err ? '<span class="err" role="alert">' + esc(err) + "</span>" : "") + "</div></div>";
   return h;
 }
 
@@ -484,7 +549,7 @@ function card(i, L, newIds, openSet) {
   h += '<div class="head">' + (newIds[i.id] ? '<span class="newtag">Nou</span>' : "") + '<span class="pill ' + i.status + '">' + esc(L[i.status]) + "</span></div>";
   h += '<div class="q"><p class="label">' + esc(P.owner_name) + " pregunta</p>";
   if (B.editingQ === i.id) {
-    h += '<textarea id="tq-' + i.id + '" data-qid="' + i.id + '" aria-label="Pregunta">' + esc(B.drafts["q" + i.id] != null ? B.drafts["q" + i.id] : i.question) + '</textarea><div class="tools"><button type="button" class="btn primary" data-act="qsave" data-id="' + i.id + '">Desa la pregunta</button><button type="button" class="btn" data-act="qcancel" data-id="' + i.id + '">Cancel·la</button></div>';
+    h += '<textarea id="tq-' + i.id + '" data-qid="' + i.id + '" maxlength="4000" aria-label="Pregunta">' + esc(B.drafts["q" + i.id] != null ? B.drafts["q" + i.id] : i.question) + '</textarea><div class="tools"><button type="button" class="btn primary" data-act="qsave" data-id="' + i.id + '">Desa la pregunta</button><button type="button" class="btn" data-act="qcancel" data-id="' + i.id + '">Cancel·la</button></div>';
   } else h += "<p>" + esc(i.question) + "</p>";
   h += "</div>";
   if (cur || i.answer || i.status !== "info") {
@@ -521,7 +586,12 @@ function card(i, L, newIds, openSet) {
 }
 
 /* ---------- accions ---------- */
-function needMe() { if (!B.me) { setMsg("Escriu el teu nom a dalt per poder escriure.", true); return true; } return false; }
+function needMe() {
+  if (B.me) return false;
+  setMsg("Escriu el teu nom a dalt per poder escriure.", true);
+  var nm = $("nm"); if (nm) { nm.scrollIntoView({ behavior: "smooth", block: "center" }); nm.focus({ preventScroll: true }); }
+  return true;
+}
 function args(extra) { return Object.assign({ p_token: B.token || null }, extra); }
 async function write(promise, okText) {
   var r = await promise;
@@ -548,7 +618,12 @@ app.addEventListener("click", async function (ev) {
   if (act === "phdelno") { B.confirmPhoto = null; renderDyn(); return; }
   if (act === "idel") { B.confirmItem = id; renderDyn(); return; }
   if (act === "idelno") { B.confirmItem = null; renderDyn(); return; }
-  if (act === "idelyes") { B.confirmItem = null; await write(sb.from("items").delete().eq("id", id), "Punt eliminat."); return; }
+  if (act === "idelyes") {
+    B.confirmItem = null;
+    var ipaths = await photoPaths("item_id", id);
+    if (await write(sb.from("items").delete().eq("id", id), "Punt eliminat.")) removeFiles(ipaths);
+    return;
+  }
   if (act === "qsave") {
     var tq = $("tq-" + id), q = tq ? tq.value.trim() : "";
     B.editingQ = null; delete B.drafts["q" + id];
@@ -557,11 +632,10 @@ app.addEventListener("click", async function (ev) {
   if (needMe()) return;
   if (act === "delyes") { var eid = b.getAttribute("data-eid"); B.confirmDel = null; await write(sb.rpc("delete_entry", args({ p_entry: eid, p_author: B.me })), "Esborrat."); return; }
   if (act === "phdelyes") {
-    var pid = b.getAttribute("data-pid"), photo = null;
-    (B.data.photos || []).forEach(function (p) { if (p.id === pid) photo = p; });
     B.confirmPhoto = null;
-    var rp = await sb.rpc("delete_photo", args({ p_photo: pid, p_author: B.me }));
-    if (!rp.error && photo) sb.storage.from("photos").remove([photo.path]);
+    var rp = await sb.rpc("delete_photo", args({ p_photo: b.getAttribute("data-pid"), p_author: B.me }));
+    if (rp.error) setMsg("No s'ha pogut esborrar la foto.", true);
+    else if (rp.data) { sb.storage.from("photos").remove([rp.data]); setMsg("Foto esborrada.", false); }
     B.json = ""; await loadBoard(false); renderDyn();
     return;
   }
@@ -590,18 +664,24 @@ app.addEventListener("change", async function (ev) {
     var id = t.getAttribute("data-id"), file = t.files && t.files[0];
     t.value = "";
     if (!file) return;
-    var errEl = $("ph-e-" + id);
+    var perr = function (msg) { B.photoErr[id] = msg; };
     if (needMe()) return;
-    if (file.size > 20 * 1024 * 1024) { if (errEl) errEl.textContent = "La foto pesa massa (màxim 20 MB)."; return; }
-    if (file.type && file.type.indexOf("image/") !== 0) { if (errEl) errEl.textContent = "Només es poden pujar imatges."; return; }
-    if (errEl) errEl.textContent = "Pujant la foto...";
-    var blob = await resizeImage(file, 1600, 0.82);
-    var path = photoPath(id, file.name);
-    var up = await sb.storage.from("photos").upload(path, blob, { contentType: blob.type || "image/jpeg" });
-    if (up.error) { var e1 = $("ph-e-" + id); if (e1) e1.textContent = "No s'ha pogut pujar la foto."; return; }
-    var r = await sb.rpc("add_photo", args({ p_item: id, p_author: B.me, p_path: path }));
-    if (r.error) { var e2 = $("ph-e-" + id); if (e2) e2.textContent = "La foto s'ha pujat però no s'ha pogut desar."; return; }
-    B.json = ""; await loadBoard(false); renderDyn();
+    if (B.uploading[id]) return;
+    delete B.photoErr[id];
+    if (file.type && file.type.indexOf("image/") !== 0) { perr("Només es poden pujar imatges."); renderDyn(); return; }
+    if (file.size > 40 * 1024 * 1024) { perr("La foto pesa massa."); renderDyn(); return; }
+    B.uploading[id] = true; renderDyn();
+    try {
+      var blob = await prepareImage(file, 1600, 0.82);
+      if (!PHOTO_TYPES[blob.type]) { perr("Aquest format d'imatge no és compatible. Prova amb una foto JPG o PNG."); return; }
+      if (blob.size > PHOTO_MAX_BYTES) { perr("La foto pesa massa (màxim 10 MB)."); return; }
+      var path = await photoPath(id, blob.type);
+      var up = await sb.storage.from("photos").upload(path, blob, { contentType: blob.type });
+      if (up.error) { perr("No s'ha pogut pujar la foto. Torna-ho a provar."); return; }
+      var r = await sb.rpc("add_photo", args({ p_item: id, p_author: B.me, p_path: path }));
+      if (r.error) { sb.storage.from("photos").remove([path]); perr("No s'ha pogut desar la foto. Torna-ho a provar."); return; }
+      B.json = ""; await loadBoard(false);
+    } finally { delete B.uploading[id]; renderDyn(); }
     return;
   }
   var sel = ev.target; if (sel.tagName !== "SELECT" || !sel.getAttribute("data-id")) return;
