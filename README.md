@@ -20,7 +20,7 @@ Hay que hacerlo una sola vez. Calcula unos 30 minutos.
 
 ## 2. Publicar la web
 
-Sirve cualquier hosting de archivos estáticos (GitHub Pages, Netlify...). Sube la carpeta entera: `index.html`, `app.js`, `style.css`, `config.js`, `vendor/`, los iconos (`icon*`), `manifest.webmanifest` y `og-image.png`.
+Sirve cualquier hosting de archivos estáticos (GitHub Pages, Netlify...). Sube la carpeta entera: `index.html`, `app.js`, `style.css`, `fonts.css`, `fonts/`, `config.js`, `vendor/`, los iconos (`icon*`), `manifest.webmanifest` y `og-image.png`.
 
 Después vuelve a Supabase > **Authentication** > **URL Configuration** y pon esa dirección en **Site URL**. Sirve para que el correo de «He oblidat la contrasenya» lleve a tu web.
 
@@ -39,11 +39,32 @@ Si publicas en otra dirección que no sea `fatointernet.github.io/seguiment-obra
 - **Enlace comprometido:** el profesional puede pulsar «Genera un enllaç nou» (el antiguo deja de funcionar) o «Desactiva l'enllaç».
 - **Fotos:** la carpeta de las fotos del cliente usa una huella (hash) del enlace, no el enlace en sí, así que reenviar la dirección de una foto no da acceso a la obra. El almacenamiento solo acepta imágenes JPG, PNG, WebP o GIF de hasta 10 MB; las fotos grandes se reducen en el móvil antes de subirlas.
 
+## Seguridad
+
+Lo que protege el código (comprobado con pruebas automáticas sobre Postgres y un navegador):
+
+- **Cada profesional solo ve sus obras** (seguridad por filas en la base de datos). El cliente sin cuenta no puede leer ninguna tabla: solo usa funciones controladas que exigen el enlace.
+- **Nadie puede firmar como el profesional.** Lo que escribe el profesional con su sesión lleva la marca «✓ professional»; el servidor rechaza a un cliente que use su nombre.
+- **Cada cliente solo borra lo suyo.** El navegador de cada cliente guarda una clave secreta; el servidor solo deja borrar respuestas y fotos creadas con esa clave. Si el cliente cambia de móvil o borra los datos del navegador, pierde la posibilidad de borrar lo antiguo (el profesional siempre puede).
+- **Límites contra el abuso:** 300 obras por cuenta, 1.000 puntos por obra, 300 respuestas y 40 fotos por punto, 3.000 archivos por obra, 10 MB por foto y solo imágenes.
+- **Navegador:** política CSP estricta (solo código propio, solo conexión con tu Supabase), sin recursos de terceros (las tipografías y la librería de Supabase van dentro del proyecto), no se puede incrustar en otra web y el texto de los usuarios nunca se interpreta como código.
+
+Ajustes que debes hacer tú en el panel de Supabase (no se pueden hacer desde el código):
+
+1. **Authentication > Sign In / Providers > Email:** contraseña mínima de 8 caracteres y, si tu plan lo permite, «Prevent use of leaked passwords». Activa **Confirm email** cuando tengas correo propio (SMTP).
+2. **Authentication > Attack Protection:** activa el CAPTCHA (Cloudflare Turnstile es gratuito) si ves registros falsos.
+3. **Authentication > URL Configuration:** en *Site URL* y *Redirect URLs* pon solo la dirección de tu web.
+4. Protege tu cuenta de Supabase y la de GitHub con **verificación en dos pasos**: quien entre ahí lo controla todo.
+5. Nunca pongas la clave secreta (`service_role` / `secret`) en la web ni la envíes por correo o WhatsApp.
+
+Si publicas con otro proyecto de Supabase, cambia su dirección en la línea `Content-Security-Policy` de `index.html` (aparece dos veces), o la web no podrá conectarse.
+
 ## Límites que debes conocer
 
 - **Quien tiene el enlace entra.** Si se reenvía, entra cualquiera. Es el precio de no pedir contraseña al cliente.
-- **El nombre del cliente no se verifica.** Cada persona escribe el suyo, y alguien podría escribir el de otra. Por eso el profesional puede borrar cualquier respuesta o foto de sus obras.
-- **Sin límite de uso por enlace.** Alguien con el enlace podría llenar una obra de texto o fotos. Se arregla regenerando el enlace.
+- **El nombre del cliente no se verifica.** Cada persona escribe el suyo, y un cliente podría escribir el nombre de otro cliente (no el del profesional). No podrá borrar lo del otro, y el profesional puede borrar cualquier respuesta o foto de sus obras.
+- **Quien tiene el enlace puede escribir** hasta los límites indicados arriba, cambiar estados y añadir puntos. Si alguien lo usa mal, regenera el enlace.
+- **Las fotos son públicas para quien tenga su dirección exacta** (larga y aleatoria), aunque el enlace de la obra se desactive después. No subas fotos de documentos o datos sensibles.
 - **Actualización cada 8 segundos** (y al volver a la pestaña), no instantánea.
 - **Plan gratuito de Supabase:** hasta donde sé, pausa los proyectos sin actividad durante una semana, limita los correos que envía por sí mismo y da 1 GB para fotos. Compruébalo en su página de precios antes de usarlo con clientes de pago. Para venderlo, lo normal es el plan de pago y un servicio de correo propio (SMTP).
 - **Archivos huérfanos:** al borrar fotos, puntos u obras se borran también los archivos. Si en ese momento falla la conexión, alguno puede quedar guardado sin usarse en el bucket `photos`.

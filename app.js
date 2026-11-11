@@ -2,6 +2,8 @@
 "use strict";
 var cfg = window.APP_CONFIG || {};
 var app = document.getElementById("app");
+// Refuse to run inside another site's frame (clickjacking); GitHub Pages cannot send the header that does this.
+if (window.top !== window.self) { app.textContent = "Obre aquesta pàgina directament al navegador."; return; }
 
 /* ---------- utilitats ---------- */
 var ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
@@ -15,6 +17,13 @@ function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return n
 function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
 var FLAG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 2h2v20H5zM8 3h12l-3 5 3 5H8z"/></svg>';
 function $(id) { return document.getElementById(id); }
+function randHex(bytes) {
+  var a = new Uint8Array(bytes); crypto.getRandomValues(a);
+  return Array.prototype.map.call(a, function (b) { return ("0" + b.toString(16)).slice(-2); }).join("");
+}
+// Secret kept in this browser: the server uses it to tell which guest answers and photos are ours to delete.
+var KEY = lsGet("seg-key");
+if (!KEY || KEY.length < 32) { KEY = randHex(32); lsSet("seg-key", KEY); }
 
 /* ---------- fotos ---------- */
 var PHOTO_TYPES = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif" };
@@ -26,7 +35,7 @@ async function sha256hex(s) {
 // The guest folder is the token's hash, so a forwarded photo URL does not reveal the share link.
 async function photoPath(itemId, type) {
   var who = B.mode === "owner" ? "owner" : await sha256hex(String(B.token).toLowerCase());
-  return B.data.project.id + "/" + who + "/" + itemId + "/" + Date.now() + "-" + Math.random().toString(36).slice(2, 8) + "." + PHOTO_TYPES[type];
+  return B.data.project.id + "/" + who + "/" + itemId + "/" + Date.now() + "-" + randHex(6) + "." + PHOTO_TYPES[type];
 }
 // Downscales big photos and re-encodes formats the bucket rejects (HEIC...) as JPEG when the browser can decode them.
 function prepareImage(file, maxDim, quality) {
@@ -102,8 +111,9 @@ function authErr(e) {
   var m = (e && e.message) || "";
   if (/Invalid login/i.test(m)) return "Correu o contrasenya incorrectes.";
   if (/already registered/i.test(m)) return "Aquest correu ja té un compte. Prova d'entrar.";
-  if (/at least 6/i.test(m)) return "La contrasenya ha de tenir almenys 6 caràcters.";
+  if (/at least \d+ char|weak|pwned|should contain/i.test(m)) return "La contrasenya és massa feble. Fes-la més llarga (8 caràcters o més) i que no sigui fàcil d'endevinar.";
   if (/valid email|invalid format/i.test(m)) return "El correu no és vàlid.";
+  if (/failed to fetch|network|load failed/i.test(m)) return "No s'ha pogut connectar. Comprova la connexió a internet i torna-ho a provar.";
   if (/rate limit|too many/i.test(m)) return "Massa intents. Espera una estona i torna-ho a provar.";
   if (/confirm/i.test(m)) return "Cal confirmar el correu abans d'entrar. Mira la teva safata d'entrada.";
   return "No s'ha pogut fer: " + m;
@@ -118,7 +128,7 @@ function viewLogin(mode, msg) {
     '<form id="af">' +
     (reg ? '<div class="field"><label for="a-name">El teu nom</label><input id="a-name" type="text" maxlength="40" autocomplete="name" required></div>' : "") +
     '<div class="field"><label for="a-mail">Correu</label><input id="a-mail" type="email" autocomplete="email" required></div>' +
-    '<div class="field"><label for="a-pass">Contrasenya</label><input id="a-pass" type="password" minlength="6" autocomplete="' + (reg ? "new-password" : "current-password") + '" required></div>' +
+    '<div class="field"><label for="a-pass">Contrasenya</label><input id="a-pass" type="password" minlength="' + (reg ? 8 : 6) + '" autocomplete="' + (reg ? "new-password" : "current-password") + '" required></div>' +
     '<button type="submit" class="btn primary">' + (reg ? "Crea el compte" : "Entra") + "</button> " +
     (reg ? "" : '<button type="button" class="linkbtn" id="forgot">He oblidat la contrasenya</button>') +
     '</form><p class="meta">Si només t\'han passat un enllaç d\'una obra, no cal compte: obre aquest enllaç directament.</p></div>';
@@ -149,7 +159,7 @@ function viewLogin(mode, msg) {
 
 function viewNewPassword(msg) {
   app.innerHTML = '<div class="auth"><h1>Contrasenya nova</h1>' + (msg ? '<p class="err">' + esc(msg) + "</p>" : "") +
-    '<form id="pf"><div class="field"><label for="p1">Escriu la contrasenya nova</label><input id="p1" type="password" minlength="6" autocomplete="new-password" required></div>' +
+    '<form id="pf"><div class="field"><label for="p1">Escriu la contrasenya nova</label><input id="p1" type="password" minlength="8" autocomplete="new-password" required></div>' +
     '<button type="submit" class="btn primary">Desa</button></form></div>';
   $("pf").addEventListener("submit", async function (ev) {
     ev.preventDefault();
@@ -270,6 +280,7 @@ async function openBoard(opts) {
   lsSet("seg-seen-" + pid, String(B.lastSeen || Date.now()));
   B.canStore = lsGet("seg-seen-" + pid) !== null;
   B.me = B.mode === "owner" ? B.data.project.owner_name : (lsGet("seg-name") || "");
+  if (isOwnerName(B.me)) B.me = "";
   if (B.mode === "owner") {
     var sr = await sb.from("projects").select("share_token,share_enabled").eq("id", pid).single();
     B.share = sr.error ? null : sr.data;
@@ -287,7 +298,7 @@ document.addEventListener("visibilitychange", function () {
 
 async function loadBoard(first) {
   var mine = B;
-  var r = await sb.rpc("get_board", { p_project: mine.projectId || null, p_token: mine.token || null });
+  var r = await sb.rpc("get_board", { p_project: mine.projectId || null, p_token: mine.token || null, p_key: mine.mode === "guest" ? KEY : null });
   if (B !== mine) return false;
   if (r.error) {
     if (first && (r.error.code === "P0002" || /not_found/.test(r.error.message || ""))) {
@@ -309,6 +320,17 @@ async function loadBoard(first) {
   var bi = {}; r.data.items.forEach(function (i) { bi[i.id] = i; }); mine.byId = bi;
   if (!first) renderDyn();
   return true;
+}
+// A guest may not sign as the professional (the server rejects it too).
+function isOwnerName(n) {
+  var P = B.data.project;
+  return B.mode === "guest" && !P.is_owner && !!n && n.trim().toLowerCase() === P.owner_name.trim().toLowerCase();
+}
+function errText(e, fallback) {
+  var m = (e && e.message) || "";
+  if (/name_taken/.test(m)) return "Aquest nom és el del professional. Escriu el teu nom a dalt.";
+  if (/limit_reached/.test(m)) return "S'ha arribat al màxim permès. Esborra alguna cosa abans d'afegir-ne més.";
+  return fallback;
 }
 function setMsg(t, bad) { if (!B) return; B.msgText = t; B.msgBad = !!bad; var el = $("status"); if (el) { el.textContent = t; el.className = "status" + (bad ? " bad" : ""); } }
 
@@ -343,7 +365,7 @@ function renderShell() {
     h += "</div>";
   }
   if (B.mode === "guest" || !B.me) {
-    h += '<div class="panel" id="namep"><h3>' + (B.me ? "Escrius com a " + esc(B.me) : "Qui ets?") + '</h3><div class="row"><input id="nm" type="text" maxlength="40" placeholder="El teu nom" value="' + esc(B.me) + '" aria-label="El teu nom" style="max-width:240px"><button type="button" class="btn primary" id="nsave">Desa el nom</button></div>' +
+    h += '<div class="panel" id="namep"><h3>' + (B.me ? "Escrius com a " + esc(B.me) : "Qui ets?") + '</h3><div class="row"><input id="nm" type="text" maxlength="40" placeholder="El teu nom" value="' + esc(B.me) + '" aria-label="El teu nom" class="nameinput"><button type="button" class="btn primary" id="nsave">Desa el nom</button></div>' +
       '<p class="meta">Aquest nom apareixerà amb cada canvi que facis, juntament amb la data i l\'hora.</p></div>';
   }
   h += '<p class="status' + (B.msgBad ? " bad" : "") + '" id="status" role="status">' + esc(B.msgText || "Connectat. Els canvis es veuen en directe.") + "</p>";
@@ -388,6 +410,7 @@ function bindShell() {
   var ns = $("nsave");
   if (ns) ns.addEventListener("click", function () {
     var v = $("nm").value.trim(); if (!v) { $("nm").focus(); return; }
+    if (isOwnerName(v)) { setMsg("Aquest nom és el del professional. Escriu el teu.", true); $("nm").focus(); return; }
     B.me = v; lsSet("seg-name", v); renderShell(); renderDyn(); setMsg("Nom desat. Ja pots escriure.", false);
   });
   var nm = $("nm");
@@ -420,7 +443,7 @@ function bindShell() {
     var pos = B.data.items.reduce(function (m, i) { return Math.max(m, i.position); }, -1) + 1;
     var r = await sb.rpc("add_item", args({ p_project: B.data.project.id, p_section: sec, p_title: impTitle(q) || sec, p_question: q, p_position: pos }));
     abtn.disabled = false;
-    if (r.error) { $("ap-e").textContent = "No s'ha pogut afegir. Torna-ho a provar."; return; }
+    if (r.error) { $("ap-e").textContent = errText(r.error, "No s'ha pogut afegir. Torna-ho a provar."); return; }
     $("ap-q").value = ""; setMsg("Punt afegit.", false); B.json = ""; await loadBoard(false); fillSecs();
   });
   var impf = $("impf");
@@ -510,11 +533,17 @@ function renderDyn() {
   B.focusNext = false;
 }
 
-function canDelete(author) { return B.mode === "owner" || (!!B.me && author.toLowerCase() === B.me.toLowerCase()); }
+// Mirrors delete_entry/delete_photo: own device key, or name match for rows written before keys existed.
+function canDelete(x) {
+  if (B.mode === "owner") return true;
+  if (x.by_owner) return false;
+  return x.mine === true || (x.legacy !== false && !!B.me && x.author.toLowerCase() === B.me.toLowerCase() && !isOwnerName(x.author));
+}
+function who(x) { return esc(x.author) + (x.by_owner ? ' <span class="verif" title="Escrit pel professional amb la seva sessió iniciada">✓ professional</span>' : ""); }
 
 function entryMeta(e, label) {
-  var h = '<p class="meta">' + label + esc(e.author) + " · " + esc(fmt(e.created_at));
-  if (canDelete(e.author)) {
+  var h = '<p class="meta">' + label + who(e) + " · " + esc(fmt(e.created_at));
+  if (canDelete(e)) {
     if (B.confirmDel === e.id) h += ' · Segur? <button type="button" class="linkbtn danger" data-act="delyes" data-eid="' + e.id + '">Sí, esborra</button> <button type="button" class="linkbtn" data-act="delno">No</button>';
     else h += ' · <button type="button" class="linkbtn" data-act="del" data-eid="' + e.id + '">Esborra</button>';
   }
@@ -527,11 +556,11 @@ function photosBlock(i) {
   if (pics.length) {
     h += '<div class="photogrid">' + pics.map(function (p) {
       var url = photoUrl(p.path);
-      var del = canDelete(p.author) ? (B.confirmPhoto === p.id
+      var del = canDelete(p) ? (B.confirmPhoto === p.id
         ? ' · Segur? <button type="button" class="linkbtn danger" data-act="phdelyes" data-pid="' + p.id + '">Sí</button> <button type="button" class="linkbtn" data-act="phdelno">No</button>'
         : ' · <button type="button" class="linkbtn" data-act="phdel" data-pid="' + p.id + '">Esborra</button>') : "";
       return '<figure><a href="' + esc(url) + '" target="_blank" rel="noopener"><img src="' + esc(url) + '" alt="Foto de ' + esc(p.author) + '" loading="lazy"></a>' +
-        '<figcaption>' + esc(p.author) + del + "</figcaption></figure>";
+        '<figcaption>' + who(p) + del + "</figcaption></figure>";
     }).join("") + "</div>";
   }
   var err = B.photoErr[i.id];
@@ -595,7 +624,7 @@ function needMe() {
 function args(extra) { return Object.assign({ p_token: B.token || null }, extra); }
 async function write(promise, okText) {
   var r = await promise;
-  if (r.error) { setMsg("No s'ha pogut desar. Torna-ho a provar.", true); await loadBoard(false); renderDyn(); return false; }
+  if (r.error) { setMsg(errText(r.error, "No s'ha pogut desar. Torna-ho a provar."), true); await loadBoard(false); renderDyn(); return false; }
   if (okText) setMsg(okText, false);
   B.json = ""; await loadBoard(false); renderDyn(); return true;
 }
@@ -630,10 +659,10 @@ app.addEventListener("click", async function (ev) {
     await write(sb.from("items").update({ question: q, title: impTitle(q) || item.section || "Punt" }).eq("id", id), "Pregunta desada."); return;
   }
   if (needMe()) return;
-  if (act === "delyes") { var eid = b.getAttribute("data-eid"); B.confirmDel = null; await write(sb.rpc("delete_entry", args({ p_entry: eid, p_author: B.me })), "Esborrat."); return; }
+  if (act === "delyes") { var eid = b.getAttribute("data-eid"); B.confirmDel = null; await write(sb.rpc("delete_entry", args({ p_entry: eid, p_author: B.me, p_key: KEY })), "Esborrat."); return; }
   if (act === "phdelyes") {
     B.confirmPhoto = null;
-    var rp = await sb.rpc("delete_photo", args({ p_photo: b.getAttribute("data-pid"), p_author: B.me }));
+    var rp = await sb.rpc("delete_photo", args({ p_photo: b.getAttribute("data-pid"), p_author: B.me, p_key: KEY }));
     if (rp.error) setMsg("No s'ha pogut esborrar la foto.", true);
     else if (rp.data) { sb.storage.from("photos").remove([rp.data]); setMsg("Foto esborrada.", false); }
     B.json = ""; await loadBoard(false); renderDyn();
@@ -646,7 +675,7 @@ app.addEventListener("click", async function (ev) {
     var cur = current(item), prev = cur ? cur.body : (item.answer || "");
     if (text === prev) { B.editing = null; renderDyn(); return; }
     B.editing = null; delete B.drafts[id];
-    var savedOk = await write(sb.rpc("add_entry", args({ p_item: id, p_author: B.me, p_body: text })), "Desat.");
+    var savedOk = await write(sb.rpc("add_entry", args({ p_item: id, p_author: B.me, p_body: text, p_key: KEY })), "Desat.");
     if (savedOk && item.status === "open") {
       await write(sb.rpc("set_status", args({ p_item: id, p_status: B.mode === "owner" ? "client" : "pro", p_author: B.me })));
     }
@@ -678,8 +707,8 @@ app.addEventListener("change", async function (ev) {
       var path = await photoPath(id, blob.type);
       var up = await sb.storage.from("photos").upload(path, blob, { contentType: blob.type });
       if (up.error) { perr("No s'ha pogut pujar la foto. Torna-ho a provar."); return; }
-      var r = await sb.rpc("add_photo", args({ p_item: id, p_author: B.me, p_path: path }));
-      if (r.error) { sb.storage.from("photos").remove([path]); perr("No s'ha pogut desar la foto. Torna-ho a provar."); return; }
+      var r = await sb.rpc("add_photo", args({ p_item: id, p_author: B.me, p_path: path, p_key: KEY }));
+      if (r.error) { sb.storage.from("photos").remove([path]); perr(errText(r.error, "No s'ha pogut desar la foto. Torna-ho a provar.")); return; }
       B.json = ""; await loadBoard(false);
     } finally { delete B.uploading[id]; renderDyn(); }
     return;
